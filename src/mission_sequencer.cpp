@@ -138,21 +138,26 @@ void MissionSequencer::cbVehicleState(const mavros_msgs::State::ConstPtr& msg)
   // check for restarting
   if (b_is_restarting_board_ && current_vehicle_state_.connected)
   {
-    // wait for at least 1 second before allowing restart to be done AND compare to previous state (being disconnected)
-    if ((ros::Time::now() - mavros_cmds_.time_arm_request).toSec() > 1 && !previous_vehicle_state_.connected)
+    // wait for at least 1 second before allowing restart to be done
+    if ((ros::Time::now() - mavros_cmds_.time_arm_request).toSec() > 1)
     {
-      // restarting complete
-      b_is_restarting_board_ = false;
-
-      // set state to idle
-      if (!checkStateChange(SequencerState::IDLE))
+      // either compare to previous state (being disconnected) or assume restart was so fast we never lost connection
+      // 20 = 4s@5Hz
+      if (cnt_successful_connection_++ > 20 || !previous_vehicle_state_.connected)
       {
-        ROS_ERROR_STREAM("* mission_sequencer::cbVehicleState: done restarting but cannot switch to IDLE");
-      }
-      current_sequencer_state_ = SequencerState::IDLE;
+        // restarting complete
+        b_is_restarting_board_ = false;
 
-      // respond to completion of restarting
-      publishResponse(current_mission_ID_, mission_sequencer::MissionRequest::RESTART, false, true);
+        // set state to idle
+        if (!checkStateChange(SequencerState::IDLE))
+        {
+          ROS_ERROR_STREAM("* mission_sequencer::cbVehicleState: done restarting but cannot switch to IDLE");
+        }
+        current_sequencer_state_ = SequencerState::IDLE;
+
+        // respond to completion of restarting
+        publishResponse(current_mission_ID_, mission_sequencer::MissionRequest::RESTART, false, true);
+      }
     }
   }
 
@@ -1501,6 +1506,7 @@ void MissionSequencer::performRestart()
       if (mavros_cmds_.restart_cmd_.response.success)
       {
         b_is_restarting_board_ = true;
+        cnt_successful_connection_ = 0;
         mavros_cmds_.time_restart_request = ros::Time::now();
         ROS_INFO(" -- restarting PX4 now");
       }

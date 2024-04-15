@@ -293,6 +293,8 @@ private:
   std::vector<Waypoint> waypoint_list_;  //!< list of waypoints currently in use
   ros::Time time_last_wp_reached_;       //!< time since last waypoint was reached
 
+  uint cnt_successful_connection_{ 0 };
+
   // communication variables
 private:
   MavrosCommands mavros_cmds_;
