@@ -1799,6 +1799,12 @@ bool MissionSequencer::checkMissionID(const uint8_t& mission_id, const uint8_t& 
       current_mission_ID_ = mission_id;
       return true;
     }
+    else if (request_id == mission_sequencer::MissionRequest::RESTART &&
+             current_sequencer_state_ == SequencerState::IDLE)
+    {
+      current_mission_ID_ = mission_id;
+      return true;
+    }
 
     return false;
   }
