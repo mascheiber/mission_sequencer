@@ -64,10 +64,12 @@ private:
     mavros_msgs::CommandBool arm_cmd_;
     mavros_msgs::CommandLong disarm_cmd_;
     mavros_msgs::CommandTOL land_cmd_;
+    mavros_msgs::CommandLong restart_cmd_;
 
     ros::Time time_arm_request;
     ros::Time time_disarm_request;
     ros::Time time_offboard_request;
+    ros::Time time_restart_request;
 
     ///
     /// \brief MavrosCommands default constructor setting the default values for all commands.
@@ -100,6 +102,18 @@ private:
       land_cmd_.request.longitude = 0;
       land_cmd_.request.altitude = 0;
 
+      // setup restart command
+      restart_cmd_.request.broadcast = false;
+      restart_cmd_.request.command = 246;
+      restart_cmd_.request.confirmation = 0;
+      restart_cmd_.request.param1 = 1;
+      restart_cmd_.request.param2 = 0;
+      restart_cmd_.request.param3 = 0;
+      restart_cmd_.request.param4 = 0;
+      restart_cmd_.request.param5 = 0;
+      restart_cmd_.request.param6 = 0;
+      restart_cmd_.request.param7 = 0;
+
       // setup offboard mode
       offboard_mode_.request.custom_mode = "OFFBOARD";
 
@@ -108,6 +122,7 @@ private:
       time_arm_request = request_time;
       time_disarm_request = request_time;
       time_offboard_request = request_time;
+      time_restart_request = request_time;
     }
   };
 
@@ -135,7 +150,8 @@ private:
 
   // ROS Service Clients
   ros::ServiceClient srv_mavros_arm_;       //!< ROS service client to the 'arm' mavros interface
-  ros::ServiceClient srv_mavros_disarm_;    //!< ROS service client to the 'disarm' mavros interface
+  ros::ServiceClient srv_mavros_cmd_long_;  //!< ROS service client to the 'command long' mavros interface, used in
+                                            //!< 'disarm' and 'restart'
   ros::ServiceClient srv_mavros_land_;      //!< ROS service client to the 'land' mavros interface
   ros::ServiceClient srv_mavros_set_mode_;  //!< ROS service client to the 'set mode' mavros interface
 
@@ -237,18 +253,20 @@ private:
   void performHold();
   void performDisarming();
   void performAbort();
+  void performRestart();
 
   void updatePose(const geometry_msgs::PoseStamped& pose);
 
 private:
-  bool b_pose_is_valid_{ false };      //!< flag to determine if a valid pose has been received
-  bool b_odom_is_valid_{ false };      //!< flag to determine if a valid pose has been received
-  bool b_state_is_valid_{ false };     //!< flag to determine if a valid mavros state has been received
-  bool b_extstate_is_valid_{ false };  //!< flag to determine if a valid extended mavros state has been received
-  bool b_executed_landing_{ false };   //!< flag to determine if a landing command has been executed
-  bool b_is_landed_{ true };           //!< flag to determine if the vehicle has landed
-  bool b_wp_is_reached_{ false };      //!< flag to determine if waypoint has been reached
-  bool b_is_arming_mavros_{ false };   //!< flag to determine if the vehicle is currently arming on mavros side
+  bool b_pose_is_valid_{ false };        //!< flag to determine if a valid pose has been received
+  bool b_odom_is_valid_{ false };        //!< flag to determine if a valid pose has been received
+  bool b_state_is_valid_{ false };       //!< flag to determine if a valid mavros state has been received
+  bool b_extstate_is_valid_{ false };    //!< flag to determine if a valid extended mavros state has been received
+  bool b_executed_landing_{ false };     //!< flag to determine if a landing command has been executed
+  bool b_is_landed_{ true };             //!< flag to determine if the vehicle has landed
+  bool b_wp_is_reached_{ false };        //!< flag to determine if waypoint has been reached
+  bool b_is_arming_mavros_{ false };     //!< flag to determine if the vehicle is currently arming on mavros side
+  bool b_is_restarting_board_{ false };  //!< flag to determine if the vehicle is currently restarting the board
 
   // state machine
 private:
@@ -267,12 +285,15 @@ private:
   bool current_vel_reached_[3] = { false, false, false };
 
   mavros_msgs::State current_vehicle_state_;              //!< determines the current vehicle mavros state
+  mavros_msgs::State previous_vehicle_state_;             //!< determines the previous vehicle mavros state
   mavros_msgs::ExtendedState current_vehicle_ext_state_;  //!< determines the current vehcile extended mavros state
 
   uint8_t current_mission_ID_;  //!< determines the ID of the current mission (used to safeguard that requests are
                                 //!< acutally made for the correct mission)
   std::vector<Waypoint> waypoint_list_;  //!< list of waypoints currently in use
   ros::Time time_last_wp_reached_;       //!< time since last waypoint was reached
+
+  uint cnt_successful_connection_{ 0 };
 
   // communication variables
 private:

@@ -36,6 +36,7 @@ enum class SequencerState
   HOLD,     //!< HOLD state, when vehicle is holding position until RESUME request arrives
   LAND,     //!< LAND state, when vehicle is in landing phase
   DISARM,   //!< DISARM state, when vehicle is tring to disarm (turn off motors)
+  RESTART,  //!< RESTART state, when vehicle is tring to restart the controller
 
   /// \deprecated will be moved to individual enum soon
   RESUME

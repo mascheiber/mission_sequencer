@@ -98,7 +98,7 @@ MissionSequencer::MissionSequencer(ros::NodeHandle& nh, ros::NodeHandle& pnh)
 
   // setup ROS services (relative to node's namespace)
   srv_mavros_arm_ = nh_.serviceClient<mavros_msgs::CommandBool>(sequencer_params_.srv_cmd_arming_);
-  srv_mavros_disarm_ = nh_.serviceClient<mavros_msgs::CommandLong>(sequencer_params_.srv_cmd_command_);
+  srv_mavros_cmd_long_ = nh_.serviceClient<mavros_msgs::CommandLong>(sequencer_params_.srv_cmd_command_);
   srv_mavros_land_ = nh_.serviceClient<mavros_msgs::CommandTOL>(sequencer_params_.srv_cmd_land_);
   srv_mavros_set_mode_ = nh_.serviceClient<mavros_msgs::SetMode>(sequencer_params_.srv_cmd_set_mode_);
 
@@ -122,8 +122,10 @@ MissionSequencer::~MissionSequencer()
 void MissionSequencer::cbVehicleState(const mavros_msgs::State::ConstPtr& msg)
 {
   b_state_is_valid_ = true;
+  previous_vehicle_state_ = current_vehicle_state_;
   current_vehicle_state_ = *msg;
 
+  // check for arming
   if (b_is_arming_mavros_ && current_vehicle_state_.armed)
   {
     // arming complete
@@ -133,8 +135,35 @@ void MissionSequencer::cbVehicleState(const mavros_msgs::State::ConstPtr& msg)
     publishResponse(current_mission_ID_, mission_sequencer::MissionRequest::ARM, false, true);
   }
 
+  // check for restarting
+  if (b_is_restarting_board_ && current_vehicle_state_.connected)
+  {
+    // wait for at least 1 second before allowing restart to be done
+    if ((ros::Time::now() - mavros_cmds_.time_arm_request).toSec() > 1)
+    {
+      // either compare to previous state (being disconnected) or assume restart was so fast we never lost connection
+      // 20 = 4s@5Hz
+      if (cnt_successful_connection_++ > 20 || !previous_vehicle_state_.connected)
+      {
+        // restarting complete
+        b_is_restarting_board_ = false;
+
+        // set state to idle
+        if (!checkStateChange(SequencerState::IDLE))
+        {
+          ROS_ERROR_STREAM("* mission_sequencer::cbVehicleState: done restarting but cannot switch to IDLE");
+        }
+        current_sequencer_state_ = SequencerState::IDLE;
+
+        // respond to completion of restarting
+        publishResponse(current_mission_ID_, mission_sequencer::MissionRequest::RESTART, false, true);
+      }
+    }
+  }
+
   ROS_DEBUG_STREAM_THROTTLE(sequencer_params_.topic_debug_interval_,
-                            " * msg received: armed " << (int)current_vehicle_state_.armed);
+                            " * msg received: armed " << (int)current_vehicle_state_.armed << " connected "
+                                                      << (int)current_vehicle_state_.connected);
 }
 
 void MissionSequencer::cbExtendedVehicleState(const mavros_msgs::ExtendedState::ConstPtr& msg)
@@ -622,6 +651,28 @@ void MissionSequencer::cbMSRequest(const mission_sequencer::MissionRequest::Cons
       break;
     }
 
+    case mission_sequencer::MissionRequest::RESTART: {
+      ROS_INFO_STREAM("* mission_sequencer::request::RESTART...");
+      if (checkStateChange(SequencerState::RESTART))
+      {
+        // set time for valid request
+        time_last_valid_request_ = ros::Time::now().toSec();
+
+        // transition to new state
+        current_sequencer_state_ = SequencerState::RESTART;
+
+        // Respond to request --> completed upon disarming
+        publishResponse(current_mission_ID_, msg->request, true, false);
+      }
+      else
+      {
+        // wrong input - probably due to being in dis/armed or idle state
+        ROS_WARN_STREAM("* mission_sequencer::request::RESTART - failed! Not safe to restart.");
+        b_wrong_input = true;
+      }
+      break;
+    }
+
     case mission_sequencer::MissionRequest::READ: {
       // READ means: reload a list of CSV filenames with waypoints and go to PREARM
       ROS_DEBUG_STREAM("* mission_sequencer::request::READ...");
@@ -915,6 +966,10 @@ void MissionSequencer::logic(void)
 
     case SequencerState::HOLD:
       performHold();
+      break;
+
+    case SequencerState::RESTART:
+      performRestart();
       break;
   }
 };
@@ -1415,7 +1470,7 @@ void MissionSequencer::performDisarming()
   {
     // vehicle is currently armed, issue disarm command
     is_disarmed = false;
-    if (srv_mavros_disarm_.call(mavros_cmds_.disarm_cmd_))
+    if (srv_mavros_cmd_long_.call(mavros_cmds_.disarm_cmd_))
     {
       if (mavros_cmds_.disarm_cmd_.response.success)
       {
@@ -1437,6 +1492,26 @@ void MissionSequencer::performDisarming()
 
 void MissionSequencer::performAbort()
 {
+}
+
+void MissionSequencer::performRestart()
+{
+  ROS_DEBUG_STREAM_THROTTLE(sequencer_params_.topic_debug_interval_, "* SequencerState::RESTART");
+
+  if (!b_is_restarting_board_ && (ros::Time::now() - mavros_cmds_.time_arm_request).toSec() > 10.0)
+  {
+    ROS_INFO(" => Sending restart command");
+    if (srv_mavros_cmd_long_.call(mavros_cmds_.restart_cmd_))
+    {
+      if (mavros_cmds_.restart_cmd_.response.success)
+      {
+        b_is_restarting_board_ = true;
+        cnt_successful_connection_ = 0;
+        mavros_cmds_.time_restart_request = ros::Time::now();
+        ROS_INFO(" -- restarting PX4 now");
+      }
+    }
+  }
 }
 
 bool MissionSequencer::checkWaypoint(const geometry_msgs::PoseStamped& current_waypoint)
@@ -1580,9 +1655,12 @@ bool MissionSequencer::checkStateChange(const SequencerState& new_state) const
   {
     case SequencerState::IDLE:
       // IDLE -> request(ARM) --> PREARM/ARM
+      // IDLE -> request(RESTART) --> RESTART
       if (new_state == SequencerState::ARM)
         return true;
       else if (new_state == SequencerState::PREARM)
+        return true;
+      else if (new_state == SequencerState::RESTART)
         return true;
       break;
 
@@ -1677,6 +1755,12 @@ bool MissionSequencer::checkStateChange(const SequencerState& new_state) const
       }
       break;
 
+    case SequencerState::RESTART:
+      // RESTART -> auto(X) -> IDLE
+      if (new_state == SequencerState::IDLE)
+        return true;
+      break;
+
     case SequencerState::DISARM:
     default:
       // DISARM -> request(X) --> FAULT no change allowed
@@ -1717,6 +1801,12 @@ bool MissionSequencer::checkMissionID(const uint8_t& mission_id, const uint8_t& 
       return true;
     }
     else if (request_id == mission_sequencer::MissionRequest::ARM && current_sequencer_state_ == SequencerState::IDLE)
+    {
+      current_mission_ID_ = mission_id;
+      return true;
+    }
+    else if (request_id == mission_sequencer::MissionRequest::RESTART &&
+             current_sequencer_state_ == SequencerState::IDLE)
     {
       current_mission_ID_ = mission_id;
       return true;

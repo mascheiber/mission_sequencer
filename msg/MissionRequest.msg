@@ -16,6 +16,7 @@ uint8 LAND    = 5 # land request
 uint8 HOVER   = 6 # hover request -- non blocking, when a new waypoint is received fly to it
 uint8 ABORT   = 7 # mission aborted request - safety pilot will take manual control
 uint8 DISARM  = 8 # Disarming
+uint8 RESTART = 9 # Restart control board
 
 # deprecated values
 uint8 READ    = 101 #
